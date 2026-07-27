@@ -44,17 +44,33 @@ const noteMode = ref<'preview' | 'edit'>('preview')
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
 const leftScroller = ref<HTMLElement | null>(null)
-const noteArea = ref<HTMLTextAreaElement | null>(null)
-const notePreview = ref<HTMLElement | null>(null)
+const noteEditor = ref<HTMLTextAreaElement | null>(null)
+
+const noteScroller = ref<HTMLElement | null>(null)
 const container = ref<HTMLElement | null>(null)
 
-// 当前右侧滚动元素（随模式切换）
-const rightScrollEl = (): HTMLElement | null =>
-  noteMode.value === 'edit' ? noteArea.value : notePreview.value
+
+// 右侧统一滚动元素（编辑 / 预览共用同一个滚动容器 note-body）
+const rightScrollEl = (): HTMLElement | null => noteScroller.value
+
 
 // ─── 回到顶部可见性 ──────────────────────────────────────────────────────────
 const leftScrolled = ref(false)
 const rightScrolled = ref(false)
+
+// ─── 右侧内容最小高度 ────────────────────────────────────────────────────────
+// 让右侧笔记区（编辑 / 预览）至少与左侧原文一样高，
+// 这样两侧滚动范围一致、滚动条等长，同步滚动才能一一对应。
+const contentMinHeight = ref(0)
+let leftResizeObserver: ResizeObserver | null = null
+
+const syncContentHeight = () => {
+  const el = leftScroller.value
+  if (!el) return
+  // 取左侧内容实际高度与视口高度的较大值
+  contentMinHeight.value = Math.max(el.scrollHeight, el.clientHeight)
+}
+
 
 const scrollLeftTop = () => { leftScroller.value?.scrollTo({ top: 0 }) }
 const scrollRightTop = () => { rightScrollEl()?.scrollTo({ top: 0 }) }
@@ -166,7 +182,8 @@ const restoreProgress = () => {
 }
 
 // ─── 笔记存储 ────────────────────────────────────────────────────────────────
-type NoteRecord = { content: string; cursorPos: number; savedAt: number }
+type NoteRecord = { content: string; savedAt: number }
+
 
 const readAllNotes = (): Record<string, NoteRecord> => {
   try { return JSON.parse(localStorage.getItem(NOTES_KEY) ?? '{}') } catch { return {} }
@@ -179,11 +196,7 @@ const saveNote = () => {
   if (!noteDirty.value) return
   try {
     const all = readAllNotes()
-    all[props.queueId] = {
-      content: noteContent.value,
-      cursorPos: noteArea.value?.selectionStart ?? 0,
-      savedAt: Date.now(),
-    }
+    all[props.queueId] = { content: noteContent.value, savedAt: Date.now() }
     localStorage.setItem(NOTES_KEY, JSON.stringify(all))
     noteDirty.value = false
   } catch { /* ignore */ }
@@ -193,15 +206,42 @@ const loadNote = () => {
   const rec = readAllNotes()[props.queueId]
   noteContent.value = rec?.content ?? ''
   noteDirty.value = false
-  nextTick(() => {
-    if (noteArea.value && rec?.cursorPos != null) {
-      noteArea.value.selectionStart = rec.cursorPos
-      noteArea.value.selectionEnd = rec.cursorPos
-    }
-  })
 }
 
 const onNoteInput = () => { noteDirty.value = true }
+
+/**
+ * 点击 textarea 空白处（当前文本行数不足以覆盖点击位置）时，
+ * 自动向文本末尾补足空行，使光标落在被点击的那一行 —— 像真正的记事本。
+ */
+const onNoteClick = (e: MouseEvent) => {
+  const ta = noteEditor.value
+  if (!ta) return
+  // 光标已定位（点在已有文字上）时，浏览器会把选区放到对应字符，无需补行
+  const lineHeightPx = fontSize.value * 2 // line-height: 2
+  const paddingTop = 16 // 与 CSS padding-top 对齐
+  // 点击位置相对于文本内容顶部的 Y（含滚动）
+  const rect = ta.getBoundingClientRect()
+  const y = e.clientY - rect.top - paddingTop + ta.scrollTop
+  const clickedLine = Math.max(0, Math.floor(y / lineHeightPx)) // 0-based 目标行
+  const currentLines = ta.value.length ? ta.value.split('\n').length : 0
+  if (clickedLine >= currentLines) {
+    // 补足空行：让总行数达到 clickedLine + 1
+    const need = clickedLine + 1 - currentLines
+    const suffix = '\n'.repeat(Math.max(0, need))
+    ta.value = ta.value + suffix
+    noteContent.value = ta.value
+    noteDirty.value = true
+    // 光标放到末尾（即被点击的那一行）
+    const pos = ta.value.length
+    nextTick(() => {
+      ta.focus()
+      ta.setSelectionRange(pos, pos)
+    })
+  }
+}
+
+
 
 // ─── 5 分钟自动保存 ──────────────────────────────────────────────────────────
 let autoSaveTimer: ReturnType<typeof setInterval> | null = null
@@ -285,17 +325,25 @@ onMounted(async () => {
   window.addEventListener('mouseup', onMouseup)
   await nextTick()
   restoreProgress()
+  // 监听左侧内容高度变化，同步右侧 min-height
+  if (leftScroller.value) {
+    syncContentHeight()
+    leftResizeObserver = new ResizeObserver(syncContentHeight)
+    leftResizeObserver.observe(leftScroller.value)
+  }
 })
 
 onBeforeUnmount(() => {
   saveNote()
   stopAutoSave()
+  leftResizeObserver?.disconnect()
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('beforeunload', onBeforeUnload)
   window.removeEventListener('mousemove', onMousemove)
   window.removeEventListener('mouseup', onMouseup)
   if (syncRaf) cancelAnimationFrame(syncRaf)
 })
+
 </script>
 
 <template>
@@ -429,27 +477,37 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <!-- 右侧内容区 -->
-        <div class="note-body">
-          <!-- 编辑态 -->
+        <!-- 右侧内容区：note-body 为统一滚动容器，min-height 与左侧等高 -->
+        <div
+          ref="noteScroller"
+          class="note-body"
+          @scroll.passive="onRightScroll"
+        >
+          <!-- 编辑态：textarea，点击空白行自动补足空行，光标落在被点击的那一行 -->
           <textarea
             v-show="noteMode === 'edit'"
-            ref="noteArea"
+            ref="noteEditor"
             v-model="noteContent"
             class="note-textarea"
-            :style="{ fontSize: `${fontSize}px`, lineHeight: '2' }"
+            :style="{
+              fontSize: `${fontSize}px`,
+              lineHeight: '2',
+              minHeight: contentMinHeight ? `${contentMinHeight}px` : '100%',
+            }"
             placeholder="随手记录你的想法、理解、疑问……"
             spellcheck="false"
             @input="onNoteInput"
-            @scroll.passive="onRightScroll"
+            @click="onNoteClick"
           ></textarea>
+
+
+
 
           <!-- 预览态 -->
           <div
             v-show="noteMode === 'preview'"
-            ref="notePreview"
             class="note-preview-pane"
-            @scroll.passive="onRightScroll"
+            :style="{ minHeight: contentMinHeight ? `${contentMinHeight}px` : '100%' }"
           >
             <article
               v-if="noteContent.trim()"
@@ -467,6 +525,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+
 
         <!-- 右侧回到顶部 -->
         <button

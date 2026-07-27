@@ -233,53 +233,43 @@
 .note-unsaved ~ .note-save-btn { margin-left: 0; }
 .note-save-btn:hover { background: var(--reader-quote); color: var(--reader-ink); }
 
-/* note-body 撑满剩余高度，作为 textarea 的定位容器 */
+/*
+ * note-body：右侧统一滚动容器。
+ * overflow-y: auto 让它成为唯一的滚动源，
+ * 内部 textarea / preview 通过 min-height 撑到与左侧等高，
+ * 从而使两侧滚动条长度一致、同步滚动比例精确对应。
+ */
 .note-body {
   flex: 1;
-  position: relative;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+  background: var(--reader-surface);
 }
 
 /*
- * 笔记 textarea：带横线背景，模拟笔记本纸张。
- *
- * 关键：横线间距必须与 line-height 完全一致，才能让文字基线落在线上。
- * 这里 line-height 通过 style 绑定为 "2"（即 2em），
- * 所以 CSS 变量 --note-line-h 也必须等于 font-size × 2。
- * 由于 font-size 由 Vue 动态绑定，CSS 无法直接计算，
- * 因此改用 background-size 配合 em 单位：
- *   每条横线高度 = 2em（与 line-height 一致）
- *   background-size: 100% 2em  → 每 2em 重复一次
- *   横线位置：在每个 2em 块的最底部 1px
- *
- * padding-top 设为 0，让第一行文字的基线恰好落在第一条横线上。
- * background-position-y 微调为 calc(2em - 1px)，使线条出现在文字基线处。
+ * 笔记 textarea：不再绝对定位，改为块级自然流，
+ * 高度由内容 + min-height（Vue 动态绑定为左侧 scrollHeight）决定。
+ * 横线背景与 line-height:2 精确对齐。
  */
 .note-textarea {
-  position: absolute;
-  inset: 0;
+  display: block;
   width: 100%;
-  height: 100%;
-  padding: 0 20px 80px;
+  padding: 16px 20px 80px;
   border: none;
   outline: none;
   resize: none;
   background-color: var(--reader-surface);
   color: var(--reader-ink);
   font-family: inherit;
-  /* line-height 由 Vue :style 绑定为 "2"，此处不重复设置以免覆盖 */
   letter-spacing: .01em;
-  word-wrap: break-word;
-  overflow-y: auto;
-  scroll-behavior: auto;
   box-sizing: border-box;
+  cursor: text;
 
-  /*
-   * 横线背景：
-   *   - background-size: 100% 2em  → 每 2em 重复一次（与 line-height:2 对齐）
-   *   - 线条在每个 2em 块的最后 1px（即 calc(2em - 1px) 到 2em）
-   *   - background-attachment: local → 随内容滚动，不随视口滚动
-   */
+
+
+
+
   background-image: repeating-linear-gradient(
     to bottom,
     transparent,
@@ -289,19 +279,16 @@
   );
   background-size: 100% 2em;
   background-attachment: local;
-  /* 第一条线从顶部 2em 处开始，与第一行文字底部对齐 */
-  background-position: 0 0;
+  background-position: 0 16px; /* 与 padding-top 对齐 */
 }
-.note-textarea::placeholder { color: var(--reader-muted); opacity: .7; }
+
+
 
 /* ── 笔记预览态 ─────────────────────────────────────────────────────────── */
 .note-preview-pane {
-  position: absolute;
-  inset: 0;
-  overflow-y: auto;
-  scroll-behavior: auto;
   background: var(--reader-surface);
 }
+
 .note-prose { max-width: 640px; padding: 28px 24px 100px; }
 
 /* 笔记空状态 */
