@@ -1,5 +1,5 @@
 /* ==========================================================================
-   ReaderOverlay —— 队列级 Markdown 全屏阅读器
+   ReaderOverlay —— 队列级 Markdown 全屏阅读器（左右分栏 + 小记模式）
    四档护眼主题（纸白 / 护眼绿 / 羊皮纸 / 夜间）+ 富文本排版
    ========================================================================== */
 .reader-overlay {
@@ -16,19 +16,22 @@
   --reader-accent: #2f9e78;
   --reader-quote: #eef2ef;
   --reader-code: #eef1ee;
+  /* 横线间距 = font-size × line-height = 18px × 2 = 36px */
+  --note-line-h: 36px;
   background: var(--reader-bg);
   color: var(--reader-ink);
 }
 
 /* 纸白（默认） */
 .reader-theme-paper { --reader-bg: #f4f5f3; --reader-surface: #ffffff; --reader-ink: #232b27; --reader-muted: #71807a; }
-/* 护眼绿 —— 类似看小说的豆沙绿 */
+/* 护眼绿 */
 .reader-theme-sage { --reader-bg: #c7edcc; --reader-surface: #cdeed1; --reader-ink: #2a3a2c; --reader-muted: #4f6551; --reader-border: rgba(42,58,44,.16); --reader-quote: #b9e3be; --reader-code: #bce4c1; --reader-accent: #1f7a4d; }
 /* 羊皮纸黄 */
 .reader-theme-sepia { --reader-bg: #f3e7cf; --reader-surface: #f7eed9; --reader-ink: #4a3b25; --reader-muted: #8a7758; --reader-border: rgba(74,59,37,.16); --reader-quote: #ecdcbd; --reader-code: #ecdcbd; --reader-accent: #a5732a; }
 /* 夜间黑 */
 .reader-theme-night { --reader-bg: #14171a; --reader-surface: #1b1f23; --reader-ink: #d5dbd8; --reader-muted: #8a938e; --reader-border: rgba(213,219,216,.14); --reader-quote: #23282c; --reader-code: #23282c; --reader-accent: #4fbf92; }
 
+/* ── 顶部工具栏 ─────────────────────────────────────────────────────────── */
 .reader-bar {
   display: flex;
   align-items: center;
@@ -38,6 +41,7 @@
   padding: 12px 20px;
   background: var(--reader-surface);
   border-bottom: 1px solid var(--reader-border);
+  flex-shrink: 0;
 }
 .reader-bar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .reader-close {
@@ -51,7 +55,7 @@
 .reader-heading span { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--reader-muted); }
 .reader-heading strong { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.reader-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.reader-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .reader-theme-switch, .reader-font {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px; border-radius: 12px; border: 1px solid var(--reader-border); background: var(--reader-bg);
@@ -62,7 +66,7 @@
   font-size: 12.5px; color: var(--reader-muted); cursor: pointer; transition: all .15s;
 }
 .reader-theme-switch button.active { background: var(--reader-surface); color: var(--reader-ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.reader-theme-switch i { width: 13px; height: 13px; border-radius: 50%; border: 1px solid var(--reader-border); }
+.reader-theme-switch i { width: 13px; height: 13px; border-radius: 50%; border: 1px solid var(--reader-border); flex-shrink: 0; }
 .swatch-paper { background: #ffffff; }
 .swatch-sage { background: #c7edcc; }
 .swatch-sepia { background: #f3e7cf; }
@@ -75,7 +79,48 @@
 .reader-font button:not(:disabled):hover { background: var(--reader-surface); }
 .reader-font span { min-width: 26px; text-align: center; font-size: 12px; color: var(--reader-muted); }
 
-.reader-scroll { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+/* 同步滚动 / 导出笔记 按钮 */
+.reader-sync-btn,
+.reader-export-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 11px; border-radius: 9px;
+  border: 1px solid var(--reader-border); background: var(--reader-bg);
+  font-size: 12.5px; color: var(--reader-muted); cursor: pointer; transition: all .15s;
+}
+.reader-sync-btn:hover,
+.reader-export-btn:not(:disabled):hover { background: var(--reader-surface); color: var(--reader-ink); }
+.reader-sync-btn.active { background: var(--reader-surface); color: var(--reader-accent); border-color: var(--reader-accent); }
+.reader-export-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── 左右分栏主体 ────────────────────────────────────────────────────────── */
+.reader-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.reader-pane {
+  overflow-y: auto;
+  /* 禁用 smooth，避免同步滚动时产生惯性抖动 */
+  scroll-behavior: auto;
+  min-width: 0;
+}
+
+/* ── 分栏容器（左右各一个，用于承载滚动区 + 回到顶部按钮）───────────────── */
+.reader-pane-wrap {
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ── 左侧：预览 ─────────────────────────────────────────────────────────── */
+.reader-pane-left { flex: 1; }
+
+
 .reader-prose {
   max-width: 760px; margin: 0 auto; padding: 44px 28px 120px;
   line-height: 1.9; letter-spacing: .01em; word-wrap: break-word;
@@ -111,6 +156,190 @@
 .reader-prose th { background: var(--reader-quote); }
 .reader-prose input[type="checkbox"] { margin-right: 8px; }
 
+/* ── 中间：拖拽分割线 ───────────────────────────────────────────────────── */
+.reader-divider {
+  width: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  background: transparent;
+  transition: background .15s;
+  position: relative;
+  z-index: 1;
+}
+.reader-divider:hover,
+.reader-divider:active { background: var(--reader-border); }
+.reader-divider-handle {
+  width: 3px;
+  height: 40px;
+  border-radius: 2px;
+  background: var(--reader-border);
+  transition: background .15s;
+}
+.reader-divider:hover .reader-divider-handle,
+.reader-divider:active .reader-divider-handle { background: var(--reader-accent); }
+
+/* ── 右侧：笔记区 ───────────────────────────────────────────────────────── */
+/* 右侧分栏容器带左边框与表面色（左侧透明）*/
+.reader-pane-wrap + .reader-divider + .reader-pane-wrap {
+  border-left: 1px solid var(--reader-border);
+  background: var(--reader-surface);
+}
+
+.note-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--reader-border);
+  flex-shrink: 0;
+}
+
+/* 预览 / 笔记 切换分段控件 */
+.note-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--reader-border);
+  background: var(--reader-bg);
+}
+.note-mode-switch button {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px; border: none; border-radius: 7px; background: transparent;
+  font-size: 12.5px; color: var(--reader-muted); cursor: pointer; transition: all .15s;
+}
+.note-mode-switch button.active {
+  background: var(--reader-surface); color: var(--reader-accent);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 600;
+}
+.note-mode-switch button:not(.active):hover { color: var(--reader-ink); }
+
+.note-unsaved {
+  font-size: 11px; color: var(--reader-accent);
+  margin-left: auto;
+}
+
+.note-save-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  border: 1px solid var(--reader-border); background: transparent;
+  color: var(--reader-muted); cursor: pointer; transition: all .15s;
+  margin-left: auto;
+}
+.note-unsaved ~ .note-save-btn { margin-left: 0; }
+.note-save-btn:hover { background: var(--reader-quote); color: var(--reader-ink); }
+
+/* note-body 撑满剩余高度，作为 textarea 的定位容器 */
+.note-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/*
+ * 笔记 textarea：带横线背景，模拟笔记本纸张。
+ *
+ * 关键：横线间距必须与 line-height 完全一致，才能让文字基线落在线上。
+ * 这里 line-height 通过 style 绑定为 "2"（即 2em），
+ * 所以 CSS 变量 --note-line-h 也必须等于 font-size × 2。
+ * 由于 font-size 由 Vue 动态绑定，CSS 无法直接计算，
+ * 因此改用 background-size 配合 em 单位：
+ *   每条横线高度 = 2em（与 line-height 一致）
+ *   background-size: 100% 2em  → 每 2em 重复一次
+ *   横线位置：在每个 2em 块的最底部 1px
+ *
+ * padding-top 设为 0，让第一行文字的基线恰好落在第一条横线上。
+ * background-position-y 微调为 calc(2em - 1px)，使线条出现在文字基线处。
+ */
+.note-textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0 20px 80px;
+  border: none;
+  outline: none;
+  resize: none;
+  background-color: var(--reader-surface);
+  color: var(--reader-ink);
+  font-family: inherit;
+  /* line-height 由 Vue :style 绑定为 "2"，此处不重复设置以免覆盖 */
+  letter-spacing: .01em;
+  word-wrap: break-word;
+  overflow-y: auto;
+  scroll-behavior: auto;
+  box-sizing: border-box;
+
+  /*
+   * 横线背景：
+   *   - background-size: 100% 2em  → 每 2em 重复一次（与 line-height:2 对齐）
+   *   - 线条在每个 2em 块的最后 1px（即 calc(2em - 1px) 到 2em）
+   *   - background-attachment: local → 随内容滚动，不随视口滚动
+   */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent calc(2em - 1px),
+    var(--reader-border) calc(2em - 1px),
+    var(--reader-border) 2em
+  );
+  background-size: 100% 2em;
+  background-attachment: local;
+  /* 第一条线从顶部 2em 处开始，与第一行文字底部对齐 */
+  background-position: 0 0;
+}
+.note-textarea::placeholder { color: var(--reader-muted); opacity: .7; }
+
+/* ── 笔记预览态 ─────────────────────────────────────────────────────────── */
+.note-preview-pane {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  scroll-behavior: auto;
+  background: var(--reader-surface);
+}
+.note-prose { max-width: 640px; padding: 28px 24px 100px; }
+
+/* 笔记空状态 */
+.note-empty {
+  max-width: 340px; margin: 16vh auto 0; padding: 0 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+  color: var(--reader-muted);
+}
+.note-empty h2 { font-size: 16px; color: var(--reader-ink); font-weight: 600; }
+.note-empty p { font-size: 13.5px; line-height: 1.7; }
+.note-empty-btn {
+  margin-top: 6px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: 10px;
+  border: 1px solid var(--reader-accent); background: transparent;
+  color: var(--reader-accent); font-size: 13px; cursor: pointer; transition: all .15s;
+}
+.note-empty-btn:hover { background: var(--reader-accent); color: #fff; }
+
+/* ── 回到顶部悬浮按钮 ───────────────────────────────────────────────────── */
+.back-top {
+  position: absolute;
+  right: 18px;
+  bottom: 22px;
+  z-index: 5;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--reader-border);
+  background: var(--reader-surface);
+  color: var(--reader-ink);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,.14);
+  transition: all .15s;
+}
+.back-top:hover { background: var(--reader-accent); color: #fff; border-color: var(--reader-accent); transform: translateY(-2px); }
+
+
+/* ── 空状态 ─────────────────────────────────────────────────────────────── */
 .reader-empty {
   max-width: 460px; margin: 14vh auto 0; padding: 0 24px;
   display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
@@ -119,12 +348,15 @@
 .reader-empty h2 { font-size: 18px; color: var(--reader-ink); font-weight: 600; }
 .reader-empty p { font-size: 14px; line-height: 1.7; }
 
+/* ── 过渡动画 ────────────────────────────────────────────────────────────── */
 .reader-enter-active, .reader-leave-active { transition: opacity .22s ease, transform .22s ease; }
 .reader-enter-from, .reader-leave-to { opacity: 0; transform: translateY(10px); }
 
+/* ── 响应式 ─────────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .reader-bar { padding: 10px 14px; }
-  .reader-tools { gap: 10px; }
+  .reader-tools { gap: 8px; }
   .reader-theme-switch button span { display: none; }
   .reader-prose { padding: 28px 18px 100px; }
+  .note-textarea { padding: 0 14px 60px; }
 }

@@ -128,8 +128,23 @@ defineProps<{
       <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
       <circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" />
     </template>
+    <template v-else-if="name === 'link'">
+      <path d="M9 12h6" />
+      <path d="M10 8H7.5a3.5 3.5 0 0 0 0 7H10" />
+      <path d="M14 8h2.5a3.5 3.5 0 0 1 0 7H14" />
+    </template>
+    <template v-else-if="name === 'unlink'">
+      <path d="M10 8H7.5a3.5 3.5 0 0 0 0 7H10" />
+      <path d="M14 8h2.5a3.5 3.5 0 0 1 0 7H14" />
+      <path d="m5 4 14 16" />
+    </template>
+    <template v-else-if="name === 'save'">
+      <path d="M5 4.5h11l3 3v12H5z" />
+      <path d="M8 4.5v5h6v-5M8 19v-5h8v5" />
+    </template>
     <template v-else>
       <circle cx="12" cy="12" r="8.5" />
     </template>
+
   </svg>
 </template>
