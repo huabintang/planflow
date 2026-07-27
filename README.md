@@ -1,56 +1,106 @@
-# Planflow · Markdown 任务队列
+<div align="center">
 
-一个使用 Vue 3 + TypeScript + Vite 构建的本地任务队列。一个文件对应一个独立队列，上传多个文件不会把它们混成一张超长任务清单。
+<img src="docs/assets/preview.svg" alt="PlanFlow 界面预览" width="100%"/>
 
-## 运行项目
+# PlanFlow
+
+**把 Markdown 计划，变成会流动的任务队列**
+
+[![Vue 3](https://img.shields.io/badge/Vue-3.5-42b883?logo=vue.js&logoColor=white)](https://vuejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-5.4-646cff?logo=vite&logoColor=white)](https://vitejs.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38bdf8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Tests](https://img.shields.io/badge/Tests-30%20passing-16a86b)](./src/utils/__tests__)
+[![License](https://img.shields.io/badge/License-MIT-087849)](./LICENSE)
+
+</div>
+
+---
+
+你有没有遇到过这种情况：把一天的计划写在 Markdown 里，却要在密密麻麻的文字里找任务、划掉完成项，最后不知道自己到底做了多少？
+
+PlanFlow 解决的就是这件事。把你的 `.md` 计划文件拖进来，它会自动识别任务、按时间排列、分类展示，让你专注在"做"而不是"找"。
+
+---
+
+## ✨ 功能亮点
+
+### 🗂️ 一文件一队列，互不干扰
+每个 Markdown 文件对应一个独立队列。多个计划并排管理，不会混成一张超长清单。
+
+### 📖 全屏 Markdown 阅读器
+点击「预览原文」，以沉浸式全屏阅读原始文档。支持四档护眼主题（纸白 / 护眼绿 / 羊皮纸 / 夜间）、字号调节，以及每个队列独立的滚动进度记忆——下次打开自动回到上次读到的位置。
+
+### 🧠 智能解析引擎
+解析器只把"明确的任务写法"加入队列，普通说明段落不会被误识别：
+- `- [ ]` / `- [x]` 勾选项、普通列表、编号列表
+- `08:00`、`08:00-10:00`、`08:00 至 09:30` 等多种时间格式
+- `H001`、`H002：基础类型` 等小时课程标题
+- 缩进子列表、`说明：`、`内容：`、`重点：` 自动成为任务的具体内容
+- Markdown 表格中的时间 + 任务行
+
+### ⏱️ 时间感知
+任务时间自动归一化，支持开始时间、时间段、中文时间描述，统一展示在任务卡片上。
+
+### 💡 小时励志语
+每个 H001–H024 小时任务都有专属励志语，展开任务时顶部能量横幅同步切换，帮你保持专注节奏。
+
+### 💾 本地优先，隐私零上传
+所有数据仅保存在浏览器 `localStorage`，不依赖任何服务器，断网也能用。
+
+### 🎨 薄荷主题 UI
+清爽的薄荷绿配色，5 种队列类型（学习 / 工作 / 生活 / 运动 / 其他）各有专属色彩标识。
+
+### 🛡️ 安全富文本渲染
+阅读器使用 `marked` 解析 Markdown，`DOMPurify` 清洗 HTML，防止 XSS 注入。
+
+---
+
+## 🚀 快速开始
 
 ```bash
+# 安装依赖
 npm install
+
+# 启动开发服务器
 npm run dev
-```
 
-生产构建：
-
-```bash
+# 生产构建
 npm run build
+
+# 运行单元测试（30 项）
+npm test
 ```
 
-## 支持的计划写法
+浏览器打开 `http://localhost:5173`，把你的 `.md` 计划文件拖入左侧面板即可。
 
-最推荐使用标题 + 时间段 + Markdown 勾选项：
+---
 
-```md
-# 周三计划
+## 📝 Markdown 写法示例
+
+### 日常计划
+
+```markdown
+# 周四计划
 
 ## 学习 · 08:00-10:00
-- [ ] 完成课程第 4 章 50分钟
+- [ ] 完成 TypeScript 课程第 5 章 50分钟
+  - 先看第 5 章视频前半段
+  - 完成课后练习 1-3 题
 - [x] 整理昨天的阅读笔记
 
-## 工作 · 10:30
-- [ ] 回复客户邮件（重要）
+## 工作 · 10:30-12:00
+- [ ] 回复项目邮件
+- [ ] 准备下午会议材料 40分钟
 
-## 生活 · 18:00
-1. 采购晚餐食材
-2. 跑步 30分钟
+## 运动 · 19:30
+- [ ] 跑步 5 公里
+- [ ] 拉伸 15分钟
 ```
 
-解析器只把“明确的任务写法”加入队列，普通说明段落不会被当成任务：
+### H001 小时课程
 
-- `- [ ]` 与 `- [x]` 勾选项
-- 普通无序列表、编号列表
-- `08:00`、`08:00-09:30`、`08:00 至 09:30` 等时间格式
-- 小时课程文件中的 `H001`、`H002` 等标题
-- 缩进的子列表、`说明：`、`内容：`、`重点：`会成为任务的“具体内容”
-- Markdown 表格中的时间 + 任务行
-- 每个文件最多识别 120 项，避免异常文件拖垮页面
-
-### H001 小时课程写法
-
-文件名可以使用小时范围，例如 `TypeScript 手把手恢复课：H001–H024.md`。其中 `H001–H024` 表示课程从第 1 小时到第 24 小时。
-
-正文中每个 `Hxxx` 标题会创建一个独立任务，直到下一个 `Hxxx` 标题之前的正文、列表和子标题都会成为该任务的具体内容：
-
-```md
+```markdown
 # TypeScript 手把手恢复课
 
 ## H001
@@ -65,20 +115,52 @@ npm run build
 完成接口与泛型练习。
 ```
 
-导入后会得到按 `H001`、`H002`、`H003` 排序的小时任务；标题没有补充名称时，任务名称直接使用对应的 `Hxxx`。
+文件名可以包含小时范围，例如 `TypeScript 手把手恢复课：H001–H024.md`，解析器会自动识别。
 
-## 页面操作
+---
 
-- 左侧每个文件都是一个独立队列，可以搜索、切换、重命名和删除。
-- 任务支持新增、编辑、删除、完成/恢复和筛选。
-- 每个 `Hxxx` 小时任务都有固定的励志语；展开任务时，右侧顶部能量横幅会切换到对应小时。
-- 点击任务行可以展开“这一小时要做什么 / 具体内容 / 来源段落”，再次点击或点“收起”即可折叠。
-- 导入、保存、删除、完成等操作都会显示明确的状态反馈。
+## 🏗️ 技术栈
 
-## 数据说明
+| 层级 | 技术 |
+|---|---|
+| 框架 | Vue 3 (Composition API + `<script setup>`) |
+| 语言 | TypeScript 5.9 |
+| 构建 | Vite 5.4 + vue-tsc |
+| 样式 | Tailwind CSS 3.4（薄荷主题设计令牌） |
+| 渲染 | marked 18 + DOMPurify 3（安全富文本） |
+| 测试 | Vitest 4（30 项单测，node + jsdom 双环境） |
+| 持久化 | localStorage（`planflow.file-queues.v2`） |
 
-- 所有队列、任务与完成状态仅保存在当前浏览器的 `localStorage` 中。
-- 使用新的存储版本 `planflow.file-queues.v2`，不会继续加载旧版合并队列中的异常数据。
-- 同名文件再次导入时，会更新对应队列，并尽量保留原有完成状态。
-- 支持同时上传 `.md`、`.markdown` 和 `.txt` 文件。
-- 页面内可以导出当前完成进度为新的 Markdown 文件。
+### 项目结构
+
+```
+src/
+├── App.vue                    # 主界面（队列管理 + 任务操作）
+├── components/
+│   ├── BaseIcon.vue           # SVG 图标组件
+│   └── ReaderOverlay.vue      # 全屏 Markdown 阅读器
+├── utils/
+│   ├── markdownParser.ts      # Markdown 解析引擎
+│   ├── renderMarkdown.ts      # 安全富文本渲染
+│   ├── taskTime.ts            # 时间格式归一化
+│   └── __tests__/             # 单元测试（30 项）
+├── types.ts                   # TypeScript 类型定义
+├── styles.css                 # Tailwind 入口 + 主题样式
+└── reader.css                 # 阅读器主题变量
+```
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] 键盘快捷键支持
+- [ ] 多队列进度汇总视图
+- [ ] 任务拖拽排序
+- [ ] 导入时自动检测文件编码
+- [ ] PWA 离线支持
+
+---
+
+## 📄 License
+
+[MIT](./LICENSE) © 2025 [huabintang](https://github.com/huabintang)
