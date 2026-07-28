@@ -16,10 +16,9 @@
   --reader-accent: #2f9e78;
   --reader-quote: #eef2ef;
   --reader-code: #eef1ee;
-  /* 横线间距 = font-size × line-height = 18px × 2 = 36px */
-  --note-line-h: 36px;
   background: var(--reader-bg);
   color: var(--reader-ink);
+
 }
 
 /* 纸白（默认） */

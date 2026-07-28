@@ -144,8 +144,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .sidebar-search, .task-search { display: flex; align-items: center; gap: 9px; height: 42px; padding: 0 12px; color: #5d7f6d; border: 1px solid #b6d9c3; border-radius: 11px; background: #fbfefb; }
 .sidebar-search:focus-within, .task-search:focus-within { border-color: #91bba0; box-shadow: 0 0 0 3px rgba(79, 139, 104, .16); }
-.sidebar-search input, .task-search input { width: 100%; min-width: 0; padding: 0; color: var(--ink); font-size: 13px; border: 0; outline: 0; background: transparent; }
+.sidebar-search input, .task-search input { width: 100%; min-width: 0; padding: 0; color: var(--ink); font-size: 13px; border: 0; outline: 0; background: transparent; -webkit-appearance: none; appearance: none; }
 .sidebar-search input::placeholder, .task-search input::placeholder { color: #87988e; }
+/* 隐藏 WebKit/Blink 为 <input type="search"> 自带的原生清除叉，避免与自定义清除按钮重复出现 */
+.sidebar-search input::-webkit-search-cancel-button,
+.sidebar-search input::-webkit-search-decoration,
+.task-search input::-webkit-search-cancel-button,
+.task-search input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+
 .sidebar-search button, .task-search button { display: grid; width: 21px; height: 21px; color: #809287; place-items: center; border-radius: 5px; background: transparent; }
 .sidebar-search button:hover, .task-search button:hover { color: #315f45; background: #e3f0e7; }
 

@@ -10,6 +10,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import BaseIcon from './BaseIcon.vue'
 import { renderMarkdown } from '../utils/renderMarkdown'
 import { formatNote, noteFileName } from '../utils/noteFormat'
+import { computeBlankLineInsertion } from '../utils/noteCaret'
+
 
 const props = defineProps<{
   queueId: string
@@ -213,33 +215,43 @@ const onNoteInput = () => { noteDirty.value = true }
 /**
  * 点击 textarea 空白处（当前文本行数不足以覆盖点击位置）时，
  * 自动向文本末尾补足空行，使光标落在被点击的那一行 —— 像真正的记事本。
+ *
+ * 组件只负责「取坐标 + 读实时样式」这一薄层，具体行数计算交给纯函数
+ * computeBlankLineInsertion（已单测）。数据修改一律走 noteContent（v-model），
+ * 不手改 ta.value，避免与 Vue 声明式绑定冲突。
  */
 const onNoteClick = (e: MouseEvent) => {
   const ta = noteEditor.value
   if (!ta) return
-  // 光标已定位（点在已有文字上）时，浏览器会把选区放到对应字符，无需补行
-  const lineHeightPx = fontSize.value * 2 // line-height: 2
-  const paddingTop = 16 // 与 CSS padding-top 对齐
-  // 点击位置相对于文本内容顶部的 Y（含滚动）
+
+  // 从实时 computedStyle 读取行高 / 顶部内边距，避免与 CSS 硬编码失配（含响应式）
+  const cs = getComputedStyle(ta)
+  const lineHeightPx = parseFloat(cs.lineHeight) || fontSize.value * 2
+  const paddingTop = parseFloat(cs.paddingTop) || 0
+
+  // 点击点相对 textarea 内容顶部的 Y（含滚动、去除 padding-top）
   const rect = ta.getBoundingClientRect()
-  const y = e.clientY - rect.top - paddingTop + ta.scrollTop
-  const clickedLine = Math.max(0, Math.floor(y / lineHeightPx)) // 0-based 目标行
-  const currentLines = ta.value.length ? ta.value.split('\n').length : 0
-  if (clickedLine >= currentLines) {
-    // 补足空行：让总行数达到 clickedLine + 1
-    const need = clickedLine + 1 - currentLines
-    const suffix = '\n'.repeat(Math.max(0, need))
-    ta.value = ta.value + suffix
-    noteContent.value = ta.value
-    noteDirty.value = true
-    // 光标放到末尾（即被点击的那一行）
-    const pos = ta.value.length
-    nextTick(() => {
-      ta.focus()
-      ta.setSelectionRange(pos, pos)
-    })
-  }
+  const offsetY = e.clientY - rect.top - paddingTop + ta.scrollTop
+
+  const { linesToAppend, caretPos } = computeBlankLineInsertion({
+    offsetY,
+    lineHeightPx,
+    value: ta.value,
+  })
+
+  // caretPos === -1 表示点在已有文本内，浏览器已正确定位，无需干预
+  if (linesToAppend <= 0 || caretPos < 0) return
+
+  // 数据驱动：只改 noteContent，DOM 由 v-model patch，nextTick 后再定位光标
+  noteContent.value = ta.value + '\n'.repeat(linesToAppend)
+  noteDirty.value = true
+  nextTick(() => {
+    ta.focus()
+    ta.setSelectionRange(caretPos, caretPos)
+  })
 }
+
+
 
 
 
