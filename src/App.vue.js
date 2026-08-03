@@ -2,9 +2,21 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import BaseIcon from './components/BaseIcon.vue';
 import ReaderOverlay from './components/ReaderOverlay.vue';
 import { parseMarkdown } from './utils/markdownParser';
+import { describeRepeat, generateDailyTasks } from './utils/dailyPlan';
 const STORAGE_KEY = 'planflow.file-queues.v2';
 const MAX_TASK_DETAILS = 24;
+const DAILY_QUEUE_ID = 'queue-daily-plan';
 const queueTypes = ['学习', '工作', '生活', '运动', '其他'];
+// 周一在前、周日在后的选择顺序，value 与 Date.getDay() 对齐（0=周日）。
+const weekdayOptions = [
+    { value: 1, label: '周一' },
+    { value: 2, label: '周二' },
+    { value: 3, label: '周三' },
+    { value: 4, label: '周四' },
+    { value: 5, label: '周五' },
+    { value: 6, label: '周六' },
+    { value: 0, label: '周日' },
+];
 const hourMotivations = [
     '从这一小时开始，把想法一步步变成真正的能力。',
     '你今天啃下的难点，都会成为明天从容前行的底气。',
@@ -48,7 +60,14 @@ const readerOpen = ref(false);
 const modalMode = ref(null);
 const editingTaskId = ref('');
 const editingQueueId = ref('');
-const taskDraft = ref({ title: '', time: '', note: '', details: '' });
+const taskDraft = ref({
+    title: '',
+    time: '',
+    note: '',
+    details: '',
+    repeat: 'none',
+    weekdays: [],
+});
 const queueDraft = ref({ name: '', type: '其他' });
 const confirmTarget = ref(null);
 const toast = ref({ visible: false, title: '', detail: '', tone: 'success' });
@@ -117,6 +136,7 @@ onMounted(() => {
             const data = JSON.parse(saved);
             queues.value = Array.isArray(data.queues) ? data.queues.map((queue) => ({
                 ...queue,
+                templates: Array.isArray(queue.templates) ? queue.templates : undefined,
                 tasks: Array.isArray(queue.tasks) ? queue.tasks.map((task) => ({
                     ...task,
                     note: task.note ?? '',
@@ -132,6 +152,8 @@ onMounted(() => {
         queues.value = [];
         selectedQueueId.value = '';
     }
+    // 打开应用时，为今天补齐每日计划任务（只生成今天、已生成的不重复）。
+    runDailyGeneration();
     window.addEventListener('keydown', handleKeydown);
 });
 onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
@@ -225,50 +247,156 @@ const openNewTask = () => {
     if (!selectedQueue.value)
         return;
     editingTaskId.value = '';
-    taskDraft.value = { title: '', time: '', note: '', details: '' };
+    taskDraft.value = { title: '', time: '', note: '', details: '', repeat: 'none', weekdays: [] };
     modalMode.value = 'task';
 };
 const openEditTask = (task) => {
     editingTaskId.value = task.id;
-    taskDraft.value = { title: task.title, time: task.time, note: task.note, details: task.details.join('\n') };
+    let repeat = 'none';
+    let weekdays = [];
+    const template = task.templateId ? findTemplate(task.templateId) : null;
+    if (template) {
+        repeat = template.repeat.kind;
+        weekdays = [...template.repeat.days];
+    }
+    taskDraft.value = { title: task.title, time: task.time, note: task.note, details: task.details.join('\n'), repeat, weekdays };
     modalMode.value = 'task';
 };
+// —— 每日计划：模板存放于固定的“每日计划”队列，行为与普通导入队列隔离 ——
+const findDailyQueue = () => queues.value.find((queue) => queue.id === DAILY_QUEUE_ID) ?? null;
+const findTemplate = (templateId) => findDailyQueue()?.templates?.find((template) => template.id === templateId) ?? null;
+const ensureDailyQueue = () => {
+    let queue = findDailyQueue();
+    if (!queue) {
+        const now = new Date().toISOString();
+        queue = {
+            id: DAILY_QUEUE_ID,
+            name: '每日计划',
+            sourceName: '每日计划',
+            type: '其他',
+            tasks: [],
+            createdAt: now,
+            updatedAt: now,
+            importMessage: '每日计划：按你设定的重复规则，每天自动生成当天的任务。',
+            templates: [],
+        };
+        queues.value.unshift(queue);
+    }
+    if (!queue.templates)
+        queue.templates = [];
+    return queue;
+};
+const runDailyGeneration = () => {
+    const queue = findDailyQueue();
+    if (!queue?.templates?.length)
+        return;
+    const generated = generateDailyTasks(queue.templates, queue.tasks, new Date(), createId);
+    if (generated.length) {
+        queue.tasks.push(...generated);
+        queue.updatedAt = new Date().toISOString();
+    }
+};
+const toggleWeekday = (day) => {
+    const index = taskDraft.value.weekdays.indexOf(day);
+    if (index >= 0)
+        taskDraft.value.weekdays.splice(index, 1);
+    else
+        taskDraft.value.weekdays.push(day);
+};
+const repeatLabelForTask = (task) => {
+    const template = task.templateId ? findTemplate(task.templateId) : null;
+    return template ? describeRepeat(template.repeat) : '';
+};
+const stopRepeat = (task) => {
+    const queue = findDailyQueue();
+    if (!task.templateId || !queue?.templates)
+        return;
+    queue.templates = queue.templates.filter((template) => template.id !== task.templateId);
+    touchQueue(queue);
+    showToast('已停止重复', `「${task.title}」以后不再自动生成`);
+};
 const saveTask = () => {
-    const queue = selectedQueue.value;
     const title = taskDraft.value.title.trim();
-    if (!queue || !title)
+    if (!title)
         return;
     const now = new Date().toISOString();
+    const note = taskDraft.value.note.trim();
+    const details = taskDraft.value.details.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, MAX_TASK_DETAILS);
     const taskTime = normalizeTaskTime(taskDraft.value.time);
+    const kind = taskDraft.value.repeat;
+    const repeat = kind === 'daily' ? { kind: 'daily', days: [] }
+        : kind === 'weekly' ? { kind: 'weekly', days: [...taskDraft.value.weekdays].sort((a, b) => a - b) }
+            : null;
+    // 每周指定至少要选一天，否则不保存。
+    if (repeat?.kind === 'weekly' && !repeat.days.length)
+        return;
     if (editingTaskId.value) {
-        const task = queue.tasks.find((item) => item.id === editingTaskId.value);
-        if (!task)
+        const queue = selectedQueue.value;
+        const task = queue?.tasks.find((item) => item.id === editingTaskId.value);
+        if (!queue || !task)
             return;
         task.title = title;
         task.time = taskTime;
-        task.note = taskDraft.value.note.trim();
-        task.details = taskDraft.value.details.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, MAX_TASK_DETAILS);
+        task.note = note;
+        task.details = details;
         task.updatedAt = now;
+        // 若这是由每日模板生成的任务，同步更新模板，让以后生成也跟着改。
+        const template = task.templateId ? findTemplate(task.templateId) : null;
+        if (template) {
+            template.title = title;
+            template.note = note;
+            template.details = [...details];
+            if (repeat)
+                template.repeat = repeat;
+            template.updatedAt = now;
+        }
         touchQueue(queue);
         flashTask(task.id);
         showToast('任务已保存', title);
+        modalMode.value = null;
+        return;
     }
-    else {
-        const task = {
-            id: createId('task'),
+    // 新建且设置了重复：存为每日计划模板，并立即为今天生成（若命中）。
+    if (repeat) {
+        const queue = ensureDailyQueue();
+        const template = {
+            id: createId('tpl'),
             title,
-            completed: false,
-            time: taskTime,
-            note: taskDraft.value.note.trim(),
-            details: taskDraft.value.details.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, MAX_TASK_DETAILS),
+            note,
+            details,
+            repeat,
             createdAt: now,
             updatedAt: now,
         };
-        queue.tasks.push(task);
+        queue.templates.push(template);
+        const generated = generateDailyTasks([template], queue.tasks, new Date(), createId);
+        queue.tasks.push(...generated);
         touchQueue(queue);
-        flashTask(task.id);
-        showToast('任务已添加', `已加入「${queue.name}」`);
+        selectedQueueId.value = queue.id;
+        if (generated[0])
+            flashTask(generated[0].id);
+        showToast('每日计划已创建', `${title} · ${describeRepeat(repeat)}`);
+        modalMode.value = null;
+        return;
     }
+    // 新建普通一次性任务。
+    const queue = selectedQueue.value;
+    if (!queue)
+        return;
+    const task = {
+        id: createId('task'),
+        title,
+        completed: false,
+        time: taskTime,
+        note,
+        details,
+        createdAt: now,
+        updatedAt: now,
+    };
+    queue.tasks.push(task);
+    touchQueue(queue);
+    flashTask(task.id);
+    showToast('任务已添加', `已加入「${queue.name}」`);
     modalMode.value = null;
 };
 const openNewQueue = () => {
@@ -1254,6 +1382,51 @@ if (__VLS_ctx.selectedQueue) {
                     }, ...__VLS_functionalComponentArgsRest(__VLS_84));
                     (task.note);
                 }
+                if (__VLS_ctx.repeatLabelForTask(task)) {
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                        ...{ class: "detail-source" },
+                    });
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                        ...{ class: "template-badge" },
+                    });
+                    /** @type {[typeof BaseIcon, ]} */ ;
+                    // @ts-ignore
+                    const __VLS_87 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+                        name: "refresh",
+                        size: (12),
+                    }));
+                    const __VLS_88 = __VLS_87({
+                        name: "refresh",
+                        size: (12),
+                    }, ...__VLS_functionalComponentArgsRest(__VLS_87));
+                    (__VLS_ctx.repeatLabelForTask(task));
+                    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                        ...{ onClick: (...[$event]) => {
+                                if (!(__VLS_ctx.selectedQueue))
+                                    return;
+                                if (!(__VLS_ctx.filteredTasks.length))
+                                    return;
+                                if (!(__VLS_ctx.expandedTaskId === task.id))
+                                    return;
+                                if (!(__VLS_ctx.repeatLabelForTask(task)))
+                                    return;
+                                __VLS_ctx.stopRepeat(task);
+                            } },
+                        type: "button",
+                        ...{ class: "detail-edit-button" },
+                        ...{ style: {} },
+                    });
+                    /** @type {[typeof BaseIcon, ]} */ ;
+                    // @ts-ignore
+                    const __VLS_90 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+                        name: "trash",
+                        size: (13),
+                    }));
+                    const __VLS_91 = __VLS_90({
+                        name: "trash",
+                        size: (13),
+                    }, ...__VLS_functionalComponentArgsRest(__VLS_90));
+                }
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                     ...{ onClick: (...[$event]) => {
                             if (!(__VLS_ctx.selectedQueue))
@@ -1269,14 +1442,14 @@ if (__VLS_ctx.selectedQueue) {
                 });
                 /** @type {[typeof BaseIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_87 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+                const __VLS_93 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
                     name: "edit",
                     size: (14),
                 }));
-                const __VLS_88 = __VLS_87({
+                const __VLS_94 = __VLS_93({
                     name: "edit",
                     size: (14),
-                }, ...__VLS_functionalComponentArgsRest(__VLS_87));
+                }, ...__VLS_functionalComponentArgsRest(__VLS_93));
             }
         }
     }
@@ -1287,14 +1460,14 @@ if (__VLS_ctx.selectedQueue) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
         /** @type {[typeof BaseIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_90 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+        const __VLS_96 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
             name: (__VLS_ctx.selectedQueue.tasks.length ? 'search' : 'check'),
             size: (29),
         }));
-        const __VLS_91 = __VLS_90({
+        const __VLS_97 = __VLS_96({
             name: (__VLS_ctx.selectedQueue.tasks.length ? 'search' : 'check'),
             size: (29),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_90));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_96));
         __VLS_asFunctionalElement(__VLS_intrinsicElements.h2, __VLS_intrinsicElements.h2)({});
         (__VLS_ctx.selectedQueue.tasks.length ? '没有匹配的任务' : '这个队列还没有任务');
         __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
@@ -1307,14 +1480,14 @@ if (__VLS_ctx.selectedQueue) {
             });
             /** @type {[typeof BaseIcon, ]} */ ;
             // @ts-ignore
-            const __VLS_93 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+            const __VLS_99 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
                 name: "plus",
                 size: (16),
             }));
-            const __VLS_94 = __VLS_93({
+            const __VLS_100 = __VLS_99({
                 name: "plus",
                 size: (16),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_93));
+            }, ...__VLS_functionalComponentArgsRest(__VLS_99));
         }
     }
 }
@@ -1334,27 +1507,27 @@ else {
     });
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_96 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_102 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "menu",
         size: (19),
     }));
-    const __VLS_97 = __VLS_96({
+    const __VLS_103 = __VLS_102({
         name: "menu",
         size: (19),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_96));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_102));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "welcome-icon" },
     });
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_99 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_105 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "folder",
         size: (36),
     }));
-    const __VLS_100 = __VLS_99({
+    const __VLS_106 = __VLS_105({
         name: "folder",
         size: (36),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_99));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_105));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h1, __VLS_intrinsicElements.h1)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
@@ -1369,14 +1542,14 @@ else {
     });
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_102 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_108 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "upload",
         size: (17),
     }));
-    const __VLS_103 = __VLS_102({
+    const __VLS_109 = __VLS_108({
         name: "upload",
         size: (17),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_102));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_108));
     (__VLS_ctx.isImporting ? '正在导入…' : '选择计划文件');
     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
         ...{ onClick: (__VLS_ctx.openNewQueue) },
@@ -1385,14 +1558,14 @@ else {
     });
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_105 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_111 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "plus",
         size: (16),
     }));
-    const __VLS_106 = __VLS_105({
+    const __VLS_112 = __VLS_111({
         name: "plus",
         size: (16),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_105));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_111));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.small, __VLS_intrinsicElements.small)({});
 }
 __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
@@ -1404,16 +1577,16 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
     multiple: true,
 });
 /** @type {typeof __VLS_ctx.fileInput} */ ;
-const __VLS_108 = {}.Transition;
+const __VLS_114 = {}.Transition;
 /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
 // @ts-ignore
-const __VLS_109 = __VLS_asFunctionalComponent(__VLS_108, new __VLS_108({
+const __VLS_115 = __VLS_asFunctionalComponent(__VLS_114, new __VLS_114({
     name: "fade",
 }));
-const __VLS_110 = __VLS_109({
+const __VLS_116 = __VLS_115({
     name: "fade",
-}, ...__VLS_functionalComponentArgsRest(__VLS_109));
-__VLS_111.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_115));
+__VLS_117.slots.default;
 if (__VLS_ctx.isDragging) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "drop-layer" },
@@ -1421,28 +1594,28 @@ if (__VLS_ctx.isDragging) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_112 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_118 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "upload",
         size: (34),
     }));
-    const __VLS_113 = __VLS_112({
+    const __VLS_119 = __VLS_118({
         name: "upload",
         size: (34),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_112));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_118));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h2, __VLS_intrinsicElements.h2)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
 }
-var __VLS_111;
-const __VLS_115 = {}.Transition;
+var __VLS_117;
+const __VLS_121 = {}.Transition;
 /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
 // @ts-ignore
-const __VLS_116 = __VLS_asFunctionalComponent(__VLS_115, new __VLS_115({
+const __VLS_122 = __VLS_asFunctionalComponent(__VLS_121, new __VLS_121({
     name: "modal",
 }));
-const __VLS_117 = __VLS_116({
+const __VLS_123 = __VLS_122({
     name: "modal",
-}, ...__VLS_functionalComponentArgsRest(__VLS_116));
-__VLS_118.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_122));
+__VLS_124.slots.default;
 if (__VLS_ctx.modalMode) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ onMousedown: (...[$event]) => {
@@ -1478,14 +1651,14 @@ if (__VLS_ctx.modalMode) {
         });
         /** @type {[typeof BaseIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_119 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+        const __VLS_125 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
             name: "close",
             size: (18),
         }));
-        const __VLS_120 = __VLS_119({
+        const __VLS_126 = __VLS_125({
             name: "close",
             size: (18),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_119));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_125));
         __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
@@ -1498,7 +1671,7 @@ if (__VLS_ctx.modalMode) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
             maxlength: "20",
-            placeholder: "例如：08:30 或 H001",
+            placeholder: "例如：08:30",
         });
         (__VLS_ctx.taskDraft.time);
         __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
@@ -1517,6 +1690,47 @@ if (__VLS_ctx.modalMode) {
             maxlength: "3000",
             placeholder: "\u4f8b\u5982\uff1a\u005c\u006e\u0031\u002e\u0020\u5148\u770b\u7b2c\u0020\u0033\u0020\u8282\u89c6\u9891\u005c\u006e\u0032\u002e\u0020\u5b8c\u6210\u8bfe\u540e\u7ec3\u4e60\u005c\u006e\u0033\u002e\u0020\u8bb0\u5f55\u0020\u0033\u0020\u4e2a\u7591\u95ee",
         });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+            value: (__VLS_ctx.taskDraft.repeat),
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "none",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "daily",
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+            value: "weekly",
+        });
+        if (__VLS_ctx.taskDraft.repeat === 'weekly') {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                ...{ class: "repeat-weekdays" },
+            });
+            for (const [option] of __VLS_getVForSourceType((__VLS_ctx.weekdayOptions))) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+                    ...{ onClick: (...[$event]) => {
+                            if (!(__VLS_ctx.modalMode))
+                                return;
+                            if (!(__VLS_ctx.modalMode === 'task'))
+                                return;
+                            if (!(__VLS_ctx.taskDraft.repeat === 'weekly'))
+                                return;
+                            __VLS_ctx.toggleWeekday(option.value);
+                        } },
+                    key: (option.value),
+                    type: "button",
+                    ...{ class: ({ active: __VLS_ctx.taskDraft.weekdays.includes(option.value) }) },
+                });
+                (option.label);
+            }
+        }
+        if (__VLS_ctx.taskDraft.repeat !== 'none') {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+                ...{ class: "repeat-hint" },
+            });
+        }
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "modal-buttons" },
         });
@@ -1534,18 +1748,18 @@ if (__VLS_ctx.modalMode) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
             ...{ class: "save-button" },
             type: "submit",
-            disabled: (!__VLS_ctx.taskDraft.title.trim()),
+            disabled: (!__VLS_ctx.taskDraft.title.trim() || (__VLS_ctx.taskDraft.repeat === 'weekly' && !__VLS_ctx.taskDraft.weekdays.length)),
         });
         /** @type {[typeof BaseIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_122 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+        const __VLS_128 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
             name: "check",
             size: (16),
         }));
-        const __VLS_123 = __VLS_122({
+        const __VLS_129 = __VLS_128({
             name: "check",
             size: (16),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_122));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_128));
         (__VLS_ctx.editingTaskId ? '保存修改' : '添加任务');
     }
     else {
@@ -1574,14 +1788,14 @@ if (__VLS_ctx.modalMode) {
         });
         /** @type {[typeof BaseIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_125 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+        const __VLS_131 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
             name: "close",
             size: (18),
         }));
-        const __VLS_126 = __VLS_125({
+        const __VLS_132 = __VLS_131({
             name: "close",
             size: (18),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_125));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_131));
         __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
         __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
@@ -1623,28 +1837,28 @@ if (__VLS_ctx.modalMode) {
         });
         /** @type {[typeof BaseIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_128 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+        const __VLS_134 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
             name: "check",
             size: (16),
         }));
-        const __VLS_129 = __VLS_128({
+        const __VLS_135 = __VLS_134({
             name: "check",
             size: (16),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_128));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_134));
         (__VLS_ctx.editingQueueId ? '保存队列' : '创建队列');
     }
 }
-var __VLS_118;
-const __VLS_131 = {}.Transition;
+var __VLS_124;
+const __VLS_137 = {}.Transition;
 /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
 // @ts-ignore
-const __VLS_132 = __VLS_asFunctionalComponent(__VLS_131, new __VLS_131({
+const __VLS_138 = __VLS_asFunctionalComponent(__VLS_137, new __VLS_137({
     name: "modal",
 }));
-const __VLS_133 = __VLS_132({
+const __VLS_139 = __VLS_138({
     name: "modal",
-}, ...__VLS_functionalComponentArgsRest(__VLS_132));
-__VLS_134.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_138));
+__VLS_140.slots.default;
 if (__VLS_ctx.confirmTarget) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ onMousedown: (...[$event]) => {
@@ -1662,14 +1876,14 @@ if (__VLS_ctx.confirmTarget) {
     });
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_135 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_141 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "trash",
         size: (21),
     }));
-    const __VLS_136 = __VLS_135({
+    const __VLS_142 = __VLS_141({
         name: "trash",
         size: (21),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_135));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_141));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h2, __VLS_intrinsicElements.h2)({});
     (__VLS_ctx.confirmTarget.kind === 'queue' ? '这个队列' : '这个任务');
     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
@@ -1693,55 +1907,55 @@ if (__VLS_ctx.confirmTarget) {
         type: "button",
     });
 }
-var __VLS_134;
-const __VLS_138 = {}.Transition;
+var __VLS_140;
+const __VLS_144 = {}.Transition;
 /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
 // @ts-ignore
-const __VLS_139 = __VLS_asFunctionalComponent(__VLS_138, new __VLS_138({
+const __VLS_145 = __VLS_asFunctionalComponent(__VLS_144, new __VLS_144({
     name: "reader",
 }));
-const __VLS_140 = __VLS_139({
+const __VLS_146 = __VLS_145({
     name: "reader",
-}, ...__VLS_functionalComponentArgsRest(__VLS_139));
-__VLS_141.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_145));
+__VLS_147.slots.default;
 if (__VLS_ctx.readerOpen && __VLS_ctx.selectedQueue) {
     /** @type {[typeof ReaderOverlay, ]} */ ;
     // @ts-ignore
-    const __VLS_142 = __VLS_asFunctionalComponent(ReaderOverlay, new ReaderOverlay({
+    const __VLS_148 = __VLS_asFunctionalComponent(ReaderOverlay, new ReaderOverlay({
         ...{ 'onClose': {} },
         queueId: (__VLS_ctx.selectedQueue.id),
         title: (__VLS_ctx.selectedQueue.name),
         source: (__VLS_ctx.selectedQueue.rawContent ?? ''),
     }));
-    const __VLS_143 = __VLS_142({
+    const __VLS_149 = __VLS_148({
         ...{ 'onClose': {} },
         queueId: (__VLS_ctx.selectedQueue.id),
         title: (__VLS_ctx.selectedQueue.name),
         source: (__VLS_ctx.selectedQueue.rawContent ?? ''),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_142));
-    let __VLS_145;
-    let __VLS_146;
-    let __VLS_147;
-    const __VLS_148 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_148));
+    let __VLS_151;
+    let __VLS_152;
+    let __VLS_153;
+    const __VLS_154 = {
         onClose: (...[$event]) => {
             if (!(__VLS_ctx.readerOpen && __VLS_ctx.selectedQueue))
                 return;
             __VLS_ctx.readerOpen = false;
         }
     };
-    var __VLS_144;
+    var __VLS_150;
 }
-var __VLS_141;
-const __VLS_149 = {}.Transition;
+var __VLS_147;
+const __VLS_155 = {}.Transition;
 /** @type {[typeof __VLS_components.Transition, typeof __VLS_components.Transition, ]} */ ;
 // @ts-ignore
-const __VLS_150 = __VLS_asFunctionalComponent(__VLS_149, new __VLS_149({
+const __VLS_156 = __VLS_asFunctionalComponent(__VLS_155, new __VLS_155({
     name: "toast",
 }));
-const __VLS_151 = __VLS_150({
+const __VLS_157 = __VLS_156({
     name: "toast",
-}, ...__VLS_functionalComponentArgsRest(__VLS_150));
-__VLS_152.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_156));
+__VLS_158.slots.default;
 if (__VLS_ctx.toast.visible) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "action-toast" },
@@ -1750,14 +1964,14 @@ if (__VLS_ctx.toast.visible) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_153 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_159 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: (__VLS_ctx.toast.tone === 'success' ? 'check' : 'inbox'),
         size: (16),
     }));
-    const __VLS_154 = __VLS_153({
+    const __VLS_160 = __VLS_159({
         name: (__VLS_ctx.toast.tone === 'success' ? 'check' : 'inbox'),
         size: (16),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_153));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_159));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
     (__VLS_ctx.toast.title);
@@ -1774,16 +1988,16 @@ if (__VLS_ctx.toast.visible) {
     });
     /** @type {[typeof BaseIcon, ]} */ ;
     // @ts-ignore
-    const __VLS_156 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
+    const __VLS_162 = __VLS_asFunctionalComponent(BaseIcon, new BaseIcon({
         name: "close",
         size: (14),
     }));
-    const __VLS_157 = __VLS_156({
+    const __VLS_163 = __VLS_162({
         name: "close",
         size: (14),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_156));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_162));
 }
-var __VLS_152;
+var __VLS_158;
 /** @type {__VLS_StyleScopedClasses['queue-app']} */ ;
 /** @type {__VLS_StyleScopedClasses['queue-sidebar']} */ ;
 /** @type {__VLS_StyleScopedClasses['sidebar-brand']} */ ;
@@ -1847,6 +2061,9 @@ var __VLS_152;
 /** @type {__VLS_StyleScopedClasses['details-grid']} */ ;
 /** @type {__VLS_StyleScopedClasses['detail-placeholder']} */ ;
 /** @type {__VLS_StyleScopedClasses['detail-source']} */ ;
+/** @type {__VLS_StyleScopedClasses['detail-source']} */ ;
+/** @type {__VLS_StyleScopedClasses['template-badge']} */ ;
+/** @type {__VLS_StyleScopedClasses['detail-edit-button']} */ ;
 /** @type {__VLS_StyleScopedClasses['detail-edit-button']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-empty']} */ ;
 /** @type {__VLS_StyleScopedClasses['add-task-button']} */ ;
@@ -1862,6 +2079,8 @@ var __VLS_152;
 /** @type {__VLS_StyleScopedClasses['modal-layer']} */ ;
 /** @type {__VLS_StyleScopedClasses['simple-modal']} */ ;
 /** @type {__VLS_StyleScopedClasses['modal-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['repeat-weekdays']} */ ;
+/** @type {__VLS_StyleScopedClasses['repeat-hint']} */ ;
 /** @type {__VLS_StyleScopedClasses['modal-buttons']} */ ;
 /** @type {__VLS_StyleScopedClasses['cancel-button']} */ ;
 /** @type {__VLS_StyleScopedClasses['save-button']} */ ;
@@ -1884,6 +2103,7 @@ const __VLS_self = (await import('vue')).defineComponent({
             BaseIcon: BaseIcon,
             ReaderOverlay: ReaderOverlay,
             queueTypes: queueTypes,
+            weekdayOptions: weekdayOptions,
             queues: queues,
             selectedQueueId: selectedQueueId,
             queueSearch: queueSearch,
@@ -1923,6 +2143,9 @@ const __VLS_self = (await import('vue')).defineComponent({
             quickAddTask: quickAddTask,
             openNewTask: openNewTask,
             openEditTask: openEditTask,
+            toggleWeekday: toggleWeekday,
+            repeatLabelForTask: repeatLabelForTask,
+            stopRepeat: stopRepeat,
             saveTask: saveTask,
             openNewQueue: openNewQueue,
             openEditQueue: openEditQueue,

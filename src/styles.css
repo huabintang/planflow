@@ -321,10 +321,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .simple-modal > label { display: grid; gap: 7px; margin-bottom: 14px; }
 .simple-modal > label > span { color: #3f6e55; font-size: 13px; font-weight: 800; }
 .simple-modal input, .simple-modal textarea, .simple-modal select { width: 100%; padding: 11px 12px; color: #214d35; font-size: 14px; border: 1px solid #a9d5b9; border-radius: 11px; outline: 0; background: #f8fff9; }
-.simple-modal input, .simple-modal select { height: 39px; }
+.simple-modal input { height: 39px; }
+.simple-modal select { min-height: 42px; padding-top: 0; padding-bottom: 0; padding-right: 36px; line-height: 1.4; text-overflow: ellipsis; }
 .simple-modal textarea { min-height: 76px; resize: vertical; }
 .simple-modal input:focus, .simple-modal textarea:focus, .simple-modal select:focus { border-color: #8fbba0; box-shadow: 0 0 0 3px rgba(79, 139, 104, .16); }
 .simple-modal input::placeholder, .simple-modal textarea::placeholder { color: #84978b; }
+.repeat-weekdays { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 14px; }
+.repeat-weekdays button { min-width: 42px; height: 34px; padding: 0 8px; color: #46725a; font-size: 13px; font-weight: 800; border: 1px solid #a9d5b9; border-radius: 9px; background: #f8fff9; transition: color .16s ease, background .16s ease, border-color .16s ease; }
+.repeat-weekdays button:hover { border-color: #8fbba0; background: #eef8f1; }
+.repeat-weekdays button.active { color: #fff; border-color: var(--sage); background: var(--sage); }
+.repeat-hint { margin: -6px 0 14px; color: #557765; font-size: 12px; line-height: 1.6; }
+.template-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; color: var(--sage-dark); font-size: 11px; font-weight: 800; border-radius: 6px; background: var(--sage-soft); }
 .modal-buttons { display: flex; justify-content: flex-end; gap: 8px; padding-top: 11px; margin-top: 9px; border-top: 1px solid #dce8df; }
 .cancel-button, .save-button, .danger-button { min-height: 42px; padding: 0 17px; font-size: 13px; font-weight: 900; border-radius: 10px; }
 .cancel-button { color: #60796b; border: 1px solid #cbdcd1; background: #fbfefb; }

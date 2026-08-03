@@ -2,13 +2,25 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import BaseIcon from './components/BaseIcon.vue'
 import ReaderOverlay from './components/ReaderOverlay.vue'
-import type { QueueTask, QueueType, TaskFilter, TaskQueue } from './types'
+import type { DailyTemplate, QueueTask, QueueType, RepeatRule, TaskFilter, TaskQueue, Weekday } from './types'
 import { parseMarkdown } from './utils/markdownParser'
+import { describeRepeat, generateDailyTasks } from './utils/dailyPlan'
 
 
 const STORAGE_KEY = 'planflow.file-queues.v2'
 const MAX_TASK_DETAILS = 24
+const DAILY_QUEUE_ID = 'queue-daily-plan'
 const queueTypes: QueueType[] = ['学习', '工作', '生活', '运动', '其他']
+// 周一在前、周日在后的选择顺序，value 与 Date.getDay() 对齐（0=周日）。
+const weekdayOptions: { value: Weekday; label: string }[] = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 0, label: '周日' },
+]
 const hourMotivations = [
   '从这一小时开始，把想法一步步变成真正的能力。',
   '你今天啃下的难点，都会成为明天从容前行的底气。',
@@ -55,7 +67,14 @@ const readerOpen = ref(false)
 const modalMode = ref<'task' | 'queue' | null>(null)
 const editingTaskId = ref('')
 const editingQueueId = ref('')
-const taskDraft = ref({ title: '', time: '', note: '', details: '' })
+const taskDraft = ref({
+  title: '',
+  time: '',
+  note: '',
+  details: '',
+  repeat: 'none' as 'none' | 'daily' | 'weekly',
+  weekdays: [] as Weekday[],
+})
 const queueDraft = ref<{ name: string; type: QueueType }>({ name: '', type: '其他' })
 const confirmTarget = ref<{ kind: 'task' | 'queue'; id: string; name: string } | null>(null)
 const toast = ref({ visible: false, title: '', detail: '', tone: 'success' as 'success' | 'warning' })
@@ -125,6 +144,7 @@ onMounted(() => {
       const data = JSON.parse(saved) as { queues?: TaskQueue[]; selectedQueueId?: string }
       queues.value = Array.isArray(data.queues) ? data.queues.map((queue) => ({
         ...queue,
+        templates: Array.isArray(queue.templates) ? queue.templates : undefined,
         tasks: Array.isArray(queue.tasks) ? queue.tasks.map((task) => ({
           ...task,
           note: task.note ?? '',
@@ -138,6 +158,8 @@ onMounted(() => {
     queues.value = []
     selectedQueueId.value = ''
   }
+  // 打开应用时，为今天补齐每日计划任务（只生成今天、已生成的不重复）。
+  runDailyGeneration()
   window.addEventListener('keydown', handleKeydown)
 })
 
@@ -238,49 +260,160 @@ const quickAddTask = () => {
 const openNewTask = () => {
   if (!selectedQueue.value) return
   editingTaskId.value = ''
-  taskDraft.value = { title: '', time: '', note: '', details: '' }
+  taskDraft.value = { title: '', time: '', note: '', details: '', repeat: 'none', weekdays: [] }
   modalMode.value = 'task'
 }
 
 const openEditTask = (task: QueueTask) => {
   editingTaskId.value = task.id
-  taskDraft.value = { title: task.title, time: task.time, note: task.note, details: task.details.join('\n') }
+  let repeat: 'none' | 'daily' | 'weekly' = 'none'
+  let weekdays: Weekday[] = []
+  const template = task.templateId ? findTemplate(task.templateId) : null
+  if (template) {
+    repeat = template.repeat.kind
+    weekdays = [...template.repeat.days]
+  }
+  taskDraft.value = { title: task.title, time: task.time, note: task.note, details: task.details.join('\n'), repeat, weekdays }
   modalMode.value = 'task'
 }
 
+// —— 每日计划：模板存放于固定的“每日计划”队列，行为与普通导入队列隔离 ——
+
+const findDailyQueue = () => queues.value.find((queue) => queue.id === DAILY_QUEUE_ID) ?? null
+
+const findTemplate = (templateId: string): DailyTemplate | null =>
+  findDailyQueue()?.templates?.find((template) => template.id === templateId) ?? null
+
+const ensureDailyQueue = (): TaskQueue => {
+  let queue = findDailyQueue()
+  if (!queue) {
+    const now = new Date().toISOString()
+    queue = {
+      id: DAILY_QUEUE_ID,
+      name: '每日计划',
+      sourceName: '每日计划',
+      type: '其他',
+      tasks: [],
+      createdAt: now,
+      updatedAt: now,
+      importMessage: '每日计划：按你设定的重复规则，每天自动生成当天的任务。',
+      templates: [],
+    }
+    queues.value.unshift(queue)
+  }
+  if (!queue.templates) queue.templates = []
+  return queue
+}
+
+const runDailyGeneration = () => {
+  const queue = findDailyQueue()
+  if (!queue?.templates?.length) return
+  const generated = generateDailyTasks(queue.templates, queue.tasks, new Date(), createId)
+  if (generated.length) {
+    queue.tasks.push(...generated)
+    queue.updatedAt = new Date().toISOString()
+  }
+}
+
+const toggleWeekday = (day: Weekday) => {
+  const index = taskDraft.value.weekdays.indexOf(day)
+  if (index >= 0) taskDraft.value.weekdays.splice(index, 1)
+  else taskDraft.value.weekdays.push(day)
+}
+
+const repeatLabelForTask = (task: QueueTask) => {
+  const template = task.templateId ? findTemplate(task.templateId) : null
+  return template ? describeRepeat(template.repeat) : ''
+}
+
+const stopRepeat = (task: QueueTask) => {
+  const queue = findDailyQueue()
+  if (!task.templateId || !queue?.templates) return
+  queue.templates = queue.templates.filter((template) => template.id !== task.templateId)
+  touchQueue(queue)
+  showToast('已停止重复', `「${task.title}」以后不再自动生成`)
+}
+
 const saveTask = () => {
-  const queue = selectedQueue.value
   const title = taskDraft.value.title.trim()
-  if (!queue || !title) return
+  if (!title) return
   const now = new Date().toISOString()
+  const note = taskDraft.value.note.trim()
+  const details = taskDraft.value.details.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, MAX_TASK_DETAILS)
   const taskTime = normalizeTaskTime(taskDraft.value.time)
+  const kind = taskDraft.value.repeat
+  const repeat: RepeatRule | null =
+    kind === 'daily' ? { kind: 'daily', days: [] }
+      : kind === 'weekly' ? { kind: 'weekly', days: [...taskDraft.value.weekdays].sort((a, b) => a - b) }
+        : null
+  // 每周指定至少要选一天，否则不保存。
+  if (repeat?.kind === 'weekly' && !repeat.days.length) return
+
   if (editingTaskId.value) {
-    const task = queue.tasks.find((item) => item.id === editingTaskId.value)
-    if (!task) return
+    const queue = selectedQueue.value
+    const task = queue?.tasks.find((item) => item.id === editingTaskId.value)
+    if (!queue || !task) return
     task.title = title
     task.time = taskTime
-    task.note = taskDraft.value.note.trim()
-    task.details = taskDraft.value.details.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, MAX_TASK_DETAILS)
+    task.note = note
+    task.details = details
     task.updatedAt = now
+    // 若这是由每日模板生成的任务，同步更新模板，让以后生成也跟着改。
+    const template = task.templateId ? findTemplate(task.templateId) : null
+    if (template) {
+      template.title = title
+      template.note = note
+      template.details = [...details]
+      if (repeat) template.repeat = repeat
+      template.updatedAt = now
+    }
     touchQueue(queue)
     flashTask(task.id)
     showToast('任务已保存', title)
-  } else {
-    const task: QueueTask = {
-      id: createId('task'),
+    modalMode.value = null
+    return
+  }
+
+  // 新建且设置了重复：存为每日计划模板，并立即为今天生成（若命中）。
+  if (repeat) {
+    const queue = ensureDailyQueue()
+    const template: DailyTemplate = {
+      id: createId('tpl'),
       title,
-      completed: false,
-      time: taskTime,
-      note: taskDraft.value.note.trim(),
-      details: taskDraft.value.details.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, MAX_TASK_DETAILS),
+      note,
+      details,
+      repeat,
       createdAt: now,
       updatedAt: now,
     }
-    queue.tasks.push(task)
+    queue.templates!.push(template)
+    const generated = generateDailyTasks([template], queue.tasks, new Date(), createId)
+    queue.tasks.push(...generated)
     touchQueue(queue)
-    flashTask(task.id)
-    showToast('任务已添加', `已加入「${queue.name}」`)
+    selectedQueueId.value = queue.id
+    if (generated[0]) flashTask(generated[0].id)
+    showToast('每日计划已创建', `${title} · ${describeRepeat(repeat)}`)
+    modalMode.value = null
+    return
   }
+
+  // 新建普通一次性任务。
+  const queue = selectedQueue.value
+  if (!queue) return
+  const task: QueueTask = {
+    id: createId('task'),
+    title,
+    completed: false,
+    time: taskTime,
+    note,
+    details,
+    createdAt: now,
+    updatedAt: now,
+  }
+  queue.tasks.push(task)
+  touchQueue(queue)
+  flashTask(task.id)
+  showToast('任务已添加', `已加入「${queue.name}」`)
   modalMode.value = null
 }
 
@@ -664,6 +797,10 @@ const formatUpdatedAt = (value: string) => {
                     </div>
                   </div>
                   <div v-if="task.note" class="detail-source"><BaseIcon name="file" :size="13" />来源段落：{{ task.note }}</div>
+                  <div v-if="repeatLabelForTask(task)" class="detail-source">
+                    <span class="template-badge"><BaseIcon name="refresh" :size="12" />每日重复 · {{ repeatLabelForTask(task) }}</span>
+                    <button type="button" class="detail-edit-button" style="color:#c7785d;margin-left:auto" @click.stop="stopRepeat(task)"><BaseIcon name="trash" :size="13" />停止重复</button>
+                  </div>
                   <button class="detail-edit-button" type="button" @click.stop="openEditTask(task)"><BaseIcon name="edit" :size="14" />补充具体内容</button>
                 </div>
               </article>
@@ -709,10 +846,27 @@ const formatUpdatedAt = (value: string) => {
             <button type="button" aria-label="关闭" @click="modalMode = null"><BaseIcon name="close" :size="18" /></button>
           </div>
           <label><span>任务内容</span><input v-model="taskDraft.title" autofocus maxlength="240" placeholder="要完成什么？" /></label>
-          <label><span>时间 / 小时编号（可选）</span><input v-model="taskDraft.time" maxlength="20" placeholder="例如：08:30 或 H001" /></label>
+          <label><span>时间（可选）</span><input v-model="taskDraft.time" maxlength="20" placeholder="例如：08:30" /></label>
           <label><span>备注（可选）</span><textarea v-model="taskDraft.note" rows="3" maxlength="300" placeholder="补充说明、材料或目标"></textarea></label>
           <label><span>具体内容（每行一条）</span><textarea v-model="taskDraft.details" rows="6" maxlength="3000" placeholder="例如：\n1. 先看第 3 节视频\n2. 完成课后练习\n3. 记录 3 个疑问"></textarea></label>
-          <div class="modal-buttons"><button class="cancel-button" type="button" @click="modalMode = null">取消</button><button class="save-button" type="submit" :disabled="!taskDraft.title.trim()"><BaseIcon name="check" :size="16" />{{ editingTaskId ? '保存修改' : '添加任务' }}</button></div>
+          <label><span>重复（每日计划）</span>
+            <select v-model="taskDraft.repeat">
+              <option value="none">不重复（普通任务）</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周指定</option>
+            </select>
+          </label>
+          <div v-if="taskDraft.repeat === 'weekly'" class="repeat-weekdays">
+            <button
+              v-for="option in weekdayOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: taskDraft.weekdays.includes(option.value) }"
+              @click="toggleWeekday(option.value)"
+            >{{ option.label }}</button>
+          </div>
+          <p v-if="taskDraft.repeat !== 'none'" class="repeat-hint">到了对应日期会自动加入「每日计划」队列，每天生成一条独立任务，完成情况互不影响。</p>
+          <div class="modal-buttons"><button class="cancel-button" type="button" @click="modalMode = null">取消</button><button class="save-button" type="submit" :disabled="!taskDraft.title.trim() || (taskDraft.repeat === 'weekly' && !taskDraft.weekdays.length)"><BaseIcon name="check" :size="16" />{{ editingTaskId ? '保存修改' : '添加任务' }}</button></div>
         </form>
 
         <form v-else class="simple-modal" @submit.prevent="saveQueue">
